@@ -1,0 +1,1308 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Solar Path Simulator Professional</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/loaders/FontLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/geometries/TextGeometry.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<style>
+
+body{
+margin:0;
+overflow:hidden;
+font-family:Arial;
+}
+
+#mapBackground{
+display:none;
+}
+
+canvas{
+position:absolute;
+inset:0;
+z-index:1;
+}
+
+#ui{
+position:absolute;
+left:20px;
+top:20px;
+background:#1e2d44;
+color:white;
+padding:20px;
+border-radius:12px;
+width:320px; 
+max-height: 90vh;
+overflow-y: auto;
+z-index:2;
+}
+
+input, select{
+width:100%;
+margin-bottom:10px;
+box-sizing: border-box;
+}
+
+.time-container {
+display: flex;
+gap: 10px;
+align-items: center;
+margin-bottom: 10px;
+}
+
+.time-container input {
+margin-bottom: 0;
+}
+
+button{
+width:100%;
+padding:8px;
+margin-top:5px;
+cursor: pointer;
+background: #4a90e2;
+color: white;
+border: none;
+border-radius: 6px;
+font-weight: bold;
+}
+
+button:hover {
+background: #357abd;
+}
+
+.btn-secondary {
+background: #e2874a;
+}
+
+.btn-secondary:hover {
+background: #c57138;
+}
+
+.btn-gps {
+background: #2a9d6f;
+}
+
+.btn-gps:hover {
+background: #21825c;
+}
+
+#info {
+margin-top: 15px;
+padding: 12px;
+background: #0f1826;
+border-radius: 8px;
+font-size: 13px;
+line-height: 1.6;
+}
+
+</style>
+</head>
+
+<body>
+
+<div id="mapBackground"></div>
+
+<div id="ui">
+
+<h3>Sun Control</h3>
+
+<div>
+Location
+<select id="locationSelect">
+<option value="">Custom</option>
+<option value="sut">Suranaree University of Technology</option>
+<option value="bangkok">Bangkok Thailand</option>
+<option value="tokyo">Tokyo Japan</option>
+<option value="newyork">New York USA</option>
+<option value="london">London UK</option>
+<option value="sydney">Sydney Australia</option>
+<option value="paris">Paris France</option>
+</select>
+</div>
+
+<div>
+Latitude:
+<input id="latInput" type="number" min="-90" max="90" step="0.01" value="14.88">
+<input id="latSlider" type="range" min="-90" max="90" step="0.01" value="14.88">
+</div>
+
+<div>
+Longitude:
+<input id="lonInput" type="number" min="-180" max="180" step="0.01" value="102.01">
+<input id="lonSlider" type="range" min="-180" max="180" step="0.01" value="102.01">
+</div>
+
+Date
+<input id="date" type="date">
+
+Time
+<div class="time-container">
+<input id="timeInput" type="time" value="16:40">
+<input id="timeSlider" type="range" min="0" max="1440" step="1" value="1000">
+</div>
+
+<button onclick="playSun()">Play / Stop Sun</button>
+<button class="btn-secondary" onclick="resetCamera()">Reset Camera</button>
+<button class="btn-gps" onclick="useCurrentLocation()">Use GPS Location</button>
+
+<div id="info"></div>
+
+</div>
+
+<script>
+
+// ---------- SCENE ----------
+
+let scene=new THREE.Scene()
+
+let camera=new THREE.PerspectiveCamera(
+60,
+window.innerWidth/window.innerHeight,
+0.1,
+3000
+)
+
+camera.position.set(150,115,165)
+
+let renderer=new THREE.WebGLRenderer({antialias:true, alpha:true})
+renderer.setSize(window.innerWidth,window.innerHeight)
+renderer.shadowMap.enabled=true
+renderer.shadowMap.type = THREE.PCFSoftShadowMap; 
+renderer.setClearColor(0x000000, 0)
+
+document.body.appendChild(renderer.domElement)
+
+let controls=new THREE.OrbitControls(camera,renderer.domElement)
+controls.target.set(0, 0, 0)
+controls.update()
+const showDecor = false
+
+let backgroundMap = L.map("mapBackground", {
+zoomControl: false,
+attributionControl: false,
+dragging: false,
+scrollWheelZoom: false,
+doubleClickZoom: false,
+boxZoom: false,
+keyboard: false,
+tap: false,
+touchZoom: false
+})
+
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+maxZoom: 19
+}).addTo(backgroundMap)
+
+backgroundMap.setView([14.88, 102.01], 18)
+
+
+// ---------- SKY ----------
+
+let skyGeo=new THREE.SphereGeometry(2000,32,32)
+let skyMat=new THREE.MeshBasicMaterial({
+color:0xbfd4e6,
+side:THREE.BackSide
+})
+let sky = new THREE.Mesh(skyGeo,skyMat)
+scene.add(sky)
+
+
+// ---------- GROUND ----------
+
+const mapCanvas = document.createElement("canvas")
+mapCanvas.width = 2048
+mapCanvas.height = 2048
+const mapContext = mapCanvas.getContext("2d")
+
+const mapTexture = new THREE.CanvasTexture(mapCanvas)
+mapTexture.wrapS = THREE.ClampToEdgeWrapping
+mapTexture.wrapT = THREE.ClampToEdgeWrapping
+mapTexture.encoding = THREE.sRGBEncoding
+mapTexture.anisotropy = renderer.capabilities.getMaxAnisotropy()
+mapTexture.minFilter = THREE.LinearMipmapLinearFilter
+mapTexture.magFilter = THREE.LinearFilter
+mapTexture.generateMipmaps = true
+
+let mapPlaneMaterial = new THREE.MeshBasicMaterial({
+map: mapTexture,
+color: 0xffffff,
+side: THREE.DoubleSide
+})
+
+let mapPlane = new THREE.Mesh(
+new THREE.PlaneGeometry(600,600),
+mapPlaneMaterial
+)
+mapPlane.rotation.x = -Math.PI/2
+mapPlane.position.y = -0.12
+mapPlane.receiveShadow = false
+scene.add(mapPlane)
+
+const footprintCanvas = document.createElement("canvas")
+footprintCanvas.width = 2048
+footprintCanvas.height = 2048
+const footprintContext = footprintCanvas.getContext("2d")
+
+const footprintTexture = new THREE.CanvasTexture(footprintCanvas)
+footprintTexture.wrapS = THREE.ClampToEdgeWrapping
+footprintTexture.wrapT = THREE.ClampToEdgeWrapping
+
+let footprintPlane = new THREE.Mesh(
+new THREE.PlaneGeometry(600,600),
+new THREE.MeshBasicMaterial({
+map: footprintTexture,
+transparent: true,
+opacity: 0.95,
+side: THREE.DoubleSide
+})
+)
+footprintPlane.rotation.x = -Math.PI / 2
+footprintPlane.position.y = -0.09
+scene.add(footprintPlane)
+
+let shadowPlane = new THREE.Mesh(
+new THREE.PlaneGeometry(600,600),
+new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.28 })
+)
+shadowPlane.rotation.x = -Math.PI / 2
+shadowPlane.position.y = -0.1
+shadowPlane.receiveShadow = true
+scene.add(shadowPlane)
+
+const buildingGroup = new THREE.Group()
+scene.add(buildingGroup)
+
+let groundMaterial = new THREE.MeshStandardMaterial({
+color: 0xf2e3b0,
+roughness: 0.95,
+metalness: 0.05,
+transparent: true,
+opacity: 0.22,
+side: THREE.DoubleSide
+})
+
+let ground=new THREE.Mesh(
+new THREE.CircleGeometry(300,128),
+groundMaterial
+)
+ground.rotation.x=-Math.PI/2
+ground.receiveShadow=false 
+scene.add(ground)
+
+// ---------- SUN DOME ----------
+
+let domeRadius=120
+let solarRadius=120
+
+let domeGeo=new THREE.SphereGeometry(
+domeRadius,
+48,
+48,
+0,
+Math.PI*2,
+0,
+Math.PI/2
+)
+
+let dome=new THREE.LineSegments(
+new THREE.WireframeGeometry(domeGeo),
+new THREE.LineBasicMaterial({
+color:0xffcc66,
+transparent:true,
+opacity:0.2 
+})
+)
+scene.add(dome)
+
+function createAzimuthTicks(){
+let r=domeRadius+3
+for(let deg=0;deg<360;deg+=5){
+let rad=deg*Math.PI/180
+let length=(deg%30==0)?3:1
+
+let x1=r*Math.sin(rad)
+let z1=-r*Math.cos(rad) 
+
+let x2=(r+length)*Math.sin(rad)
+let z2=-(r+length)*Math.cos(rad)
+
+let points=[
+new THREE.Vector3(x1,0.05,z1),
+new THREE.Vector3(x2,0.05,z2)
+]
+let geometry=new THREE.BufferGeometry().setFromPoints(points)
+let line=new THREE.Line(
+geometry,
+new THREE.LineBasicMaterial({color:0x000000})
+)
+scene.add(line)
+}
+}
+createAzimuthTicks()
+
+function createCompassLabels(){
+const loader = new THREE.FontLoader()
+loader.load('https://threejs.org/examples/fonts/helvetiker_bold.typeface.json', function(font){
+const directions = [
+{label:'N',deg:0},
+{label:'E',deg:90},
+{label:'S',deg:180},
+{label:'W',deg:270}
+]
+directions.forEach(d=>{
+let r=domeRadius+6
+let rad=d.deg*Math.PI/180
+
+const geometry = new THREE.TextGeometry(d.label,{
+font:font, size:2, height:0.2
+})
+const material = new THREE.MeshBasicMaterial({color:0x111111})
+const text = new THREE.Mesh(geometry,material)
+text.rotation.x=-Math.PI/2
+text.position.set(r*Math.sin(rad), 0.05, -r*Math.cos(rad))
+scene.add(text)
+})
+})
+}
+createCompassLabels()
+
+function createDegreeText(){
+const loader = new THREE.FontLoader()
+loader.load('https://threejs.org/examples/fonts/helvetiker_regular.typeface.json', function(font){
+for(let deg=0;deg<360;deg+=30){
+let r=domeRadius+8
+let rad=deg*Math.PI/180
+const geometry = new THREE.TextGeometry(deg+"°",{
+font:font, size:1.5, height:0.1
+})
+const material = new THREE.MeshBasicMaterial({color:0x000000})
+const text = new THREE.Mesh(geometry,material)
+text.rotation.x = -Math.PI/2
+text.rotation.z = -rad
+text.position.set(r*Math.sin(rad), 0.05, -r*Math.cos(rad))
+scene.add(text)
+}
+})
+}
+createDegreeText()
+
+
+// ---------- COMPASS SPRITES ----------
+const dirs=["N","E","S","W"]
+dirs.forEach((d,i)=>{
+let canvas=document.createElement("canvas")
+let ctx=canvas.getContext("2d")
+canvas.width=256; canvas.height=256
+let colors={ N:"#000", E:"#000", S:"#000", W:"#000" }
+ctx.fillStyle=colors[d]
+ctx.font="120px Arial"; ctx.textAlign="center"; ctx.fillText(d,128,150)
+let texture=new THREE.CanvasTexture(canvas)
+let sprite=new THREE.Sprite(new THREE.SpriteMaterial({map:texture}))
+let angle=i*Math.PI/2
+sprite.position.set((domeRadius+5)*Math.sin(angle), 0.5, -(domeRadius+5)*Math.cos(angle))
+sprite.scale.set(20,20,1)
+scene.add(sprite)
+})
+
+
+// ---------- IMAGES ----------
+
+const loader = new THREE.TextureLoader()
+loader.setCrossOrigin("")
+
+let imgShake = new THREE.Sprite(new THREE.SpriteMaterial({
+map: loader.load("image2.png"),
+transparent:true
+}))
+imgShake.scale.set(25,25,1)
+imgShake.position.set(90,15,0)
+scene.add(imgShake)
+
+let texRotate = loader.load("image3.png")
+
+let imgRotate = new THREE.Mesh(
+new THREE.PlaneGeometry(25,25),
+new THREE.MeshBasicMaterial({
+map: texRotate,
+transparent:true,
+side: THREE.DoubleSide
+})
+)
+
+imgRotate.position.set(-90,15,0)
+
+scene.add(imgRotate)
+
+let imgLook = new THREE.Sprite(new THREE.SpriteMaterial({
+map: loader.load("image1.png"),
+transparent:true
+}))
+imgLook.scale.set(25,25,1)
+imgLook.position.set(0,15,90)
+scene.add(imgLook)
+
+let imgFloat = new THREE.Sprite(new THREE.SpriteMaterial({
+map: loader.load("image4.png"),
+transparent:true
+}))
+imgFloat.scale.set(25,25,1)
+imgFloat.position.set(0,15,-90)
+scene.add(imgFloat)
+
+// ซ่อนตอนเริ่ม
+imgShake.visible=false
+imgRotate.visible=false
+imgLook.visible=false
+imgFloat.visible=false
+
+// ---------- VIDEO BOARD (ZONE W) ----------
+
+let video = document.createElement("video")
+
+video.src = "snaptik_7533806547621645598_hd.mp4"
+video.loop = true
+video.controls = false
+
+// สำคัญสำหรับ iPhone
+video.playsInline = true
+video.setAttribute("playsinline","")
+video.setAttribute("webkit-playsinline","")
+
+// ป้องกัน fullscreen
+video.disablePictureInPicture = true
+
+// ป้องกัน Safari เปิด player
+video.preload = "auto"
+
+video.crossOrigin = "anonymous"
+
+// สร้าง texture จาก video
+let videoTexture = new THREE.VideoTexture(video)
+
+// กระดานวิดีโอ
+let videoBoard = new THREE.Mesh(
+new THREE.PlaneGeometry(60,35),
+new THREE.MeshBasicMaterial({
+map: videoTexture,
+side: THREE.DoubleSide
+})
+)
+
+// วางที่โซน W
+videoBoard.position.set(-120,40,0)
+videoBoard.lookAt(0,40,0)
+videoBoard.visible = showDecor
+
+scene.add(videoBoard)
+
+// ---------- PRESENTATION BOARD ----------
+
+let boardCanvas = document.createElement("canvas")
+boardCanvas.width = 1024
+boardCanvas.height = 512
+
+let ctx = boardCanvas.getContext("2d")
+
+// พื้นหลังกระดาน
+ctx.fillStyle = "rgba(20,30,50,0.85)"
+ctx.fillRect(0,0,1024,512)
+
+// กรอบ
+ctx.strokeStyle = "#ffffff"
+ctx.lineWidth = 8
+ctx.strokeRect(10,10,1004,492)
+
+// หัวข้อ
+ctx.fillStyle = "#ffffff"
+ctx.font = "bold 60px Arial"
+ctx.textAlign = "center"
+ctx.fillText("Presented by",512,120)
+
+// รายชื่อ
+ctx.font = "40px Arial"
+
+ctx.fillText("นายทักษพร ทรงพระ  B6610463",512,230)
+ctx.fillText("นายปกป้อง ณ พิกุล  B6630331",512,310)
+ctx.fillText("นายสิทธิพล บัวชมภู  B6609863",512,390)
+
+let boardTexture = new THREE.CanvasTexture(boardCanvas)
+
+let board = new THREE.Mesh(
+new THREE.PlaneGeometry(120,60),
+new THREE.MeshBasicMaterial({
+map: boardTexture,
+transparent:true
+})
+)
+
+board.position.set(0,60,-120)  // ลอยจากพื้น
+board.visible = showDecor
+scene.add(board)
+
+
+// ---------- CAMERA RESET ----------
+function resetCamera() {
+    camera.position.set(150, 115, 165);
+    controls.target.set(0, 0, 0);
+    controls.update();
+}
+
+
+// ---------- LIGHTING & SHADOWS ----------
+
+let sun=new THREE.Mesh(
+new THREE.SphereGeometry(3,32,32),
+new THREE.MeshBasicMaterial({color:0xffeeaa})
+)
+scene.add(sun)
+
+let sunVector
+let solarPathLine
+
+let sunLight=new THREE.DirectionalLight(0xffffff,1.5)
+sunLight.castShadow=true
+sunLight.shadow.camera.left = -100
+sunLight.shadow.camera.right = 100
+sunLight.shadow.camera.top = 100
+sunLight.shadow.camera.bottom = -100
+sunLight.shadow.camera.near = 0.5
+sunLight.shadow.camera.far = 300
+sunLight.shadow.bias = -0.0005 
+
+sunLight.shadow.mapSize.width=2048
+sunLight.shadow.mapSize.height=2048
+scene.add(sunLight)
+
+let ambientLight = new THREE.AmbientLight(0xffffff, 0.4)
+scene.add(ambientLight)
+
+const locations={
+sut:{lat:14.8818,lon:102.0170},
+bangkok:{lat:13.7563,lon:100.5018},
+tokyo:{lat:35.6762,lon:139.6503},
+newyork:{lat:40.7128,lon:-74.0060},
+london:{lat:51.5072,lon:-0.1276},
+sydney:{lat:-33.8688,lon:151.2093},
+paris:{lat:48.8566,lon:2.3522}
+}
+
+let latestMapRequestToken = 0
+let latestBuildingRequestToken = 0
+let lastBuildingFetchKey = ""
+let pendingBuildingFetchKey = ""
+let lastVisualLocationKey = ""
+let currentMapProjection = {
+centerLat: 14.88,
+centerLon: 102.01,
+centerTileX: 0,
+centerTileY: 0,
+worldSize: 600,
+zoom: 16
+}
+
+function clearRealBuildings(){
+while(buildingGroup.children.length){
+let child = buildingGroup.children.pop()
+buildingGroup.remove(child)
+if(child.geometry) child.geometry.dispose()
+if(child.material){
+if(Array.isArray(child.material)){
+child.material.forEach(material => material.dispose())
+}else{
+child.material.dispose()
+}
+}
+}
+}
+
+function clearBuildingOverlay(){
+footprintContext.clearRect(0, 0, footprintCanvas.width, footprintCanvas.height)
+footprintTexture.needsUpdate = true
+}
+
+function projectedToCanvas(point){
+return {
+x: (point.x / 600 + 0.5) * footprintCanvas.width,
+y: (-point.z / 600 + 0.5) * footprintCanvas.height
+}
+}
+
+function drawBuildingOverlay(projected){
+if(projected.length < 3) return
+
+footprintContext.beginPath()
+let start = projectedToCanvas(projected[0])
+footprintContext.moveTo(start.x, start.y)
+for(let i = 1; i < projected.length; i++){
+let p = projectedToCanvas(projected[i])
+footprintContext.lineTo(p.x, p.y)
+}
+footprintContext.closePath()
+footprintContext.fillStyle = "rgba(215, 208, 198, 0.82)"
+footprintContext.fill()
+footprintContext.strokeStyle = "rgba(150, 142, 130, 0.95)"
+footprintContext.lineWidth = 3
+footprintContext.stroke()
+footprintTexture.needsUpdate = true
+}
+
+function projectLatLonToMap(lat, lon){
+let xTile = lonToTileX(lon, currentMapProjection.zoom)
+let yTile = latToTileY(lat, currentMapProjection.zoom)
+let tileDeltaX = xTile - currentMapProjection.centerTileX
+let tileDeltaY = yTile - currentMapProjection.centerTileY
+let unitsPerTile = currentMapProjection.worldSize / 2
+
+return {
+x: tileDeltaX * unitsPerTile,
+z: -tileDeltaY * unitsPerTile
+}
+}
+
+function parseBuildingHeight(tags){
+let rawHeight = tags["height"] || tags["building:height"]
+if(rawHeight){
+let value = parseFloat(String(rawHeight).replace(/[^\d.]/g, ""))
+if(Number.isFinite(value) && value > 0) return value
+}
+
+let levels = parseFloat(tags["building:levels"] || tags["levels"] || "")
+if(Number.isFinite(levels) && levels > 0) return levels * 3.4
+
+return 12
+}
+
+function addRealBuilding(geometryPoints, tags){
+if(!geometryPoints || geometryPoints.length < 3) return
+
+let projected = geometryPoints.map(point => projectLatLonToMap(point.lat, point.lon))
+drawBuildingOverlay(projected)
+let shape = new THREE.Shape()
+shape.moveTo(projected[0].x, projected[0].z)
+for(let i = 1; i < projected.length; i++){
+shape.lineTo(projected[i].x, projected[i].z)
+}
+
+let height = parseBuildingHeight(tags) * 1.6
+let extrude = new THREE.ExtrudeGeometry(shape, {
+depth: height,
+bevelEnabled: false
+})
+extrude.rotateX(-Math.PI / 2)
+
+let color = tags["building"] === "commercial" ? 0xcbbca9 : 0xd7d0c6
+let material = new THREE.MeshStandardMaterial({
+color,
+roughness: 0.95,
+metalness: 0.03
+})
+
+let mesh = new THREE.Mesh(extrude, material)
+mesh.castShadow = true
+mesh.receiveShadow = true
+mesh.position.y = 0
+buildingGroup.add(mesh)
+}
+
+async function updateRealBuildings(lat, lon){
+let fetchKey = `${lat.toFixed(4)},${lon.toFixed(4)}`
+if(fetchKey === lastBuildingFetchKey || fetchKey === pendingBuildingFetchKey) return
+
+let requestToken = ++latestBuildingRequestToken
+pendingBuildingFetchKey = fetchKey
+
+let radius = 170
+let query = `
+[out:json][timeout:20];
+(
+  way["building"](around:${radius},${lat},${lon});
+  relation["building"](around:${radius},${lat},${lon});
+);
+out geom;
+`
+
+try{
+let response = await fetch("https://overpass-api.de/api/interpreter", {
+method: "POST",
+headers: { "Content-Type": "text/plain;charset=UTF-8" },
+body: query
+})
+
+if(!response.ok) throw new Error("building fetch failed")
+let data = await response.json()
+if(requestToken !== latestBuildingRequestToken) return
+
+clearRealBuildings()
+clearBuildingOverlay()
+for(const element of data.elements || []){
+if(element.type !== "way" || !element.geometry || !element.tags) continue
+addRealBuilding(element.geometry, element.tags)
+}
+lastBuildingFetchKey = fetchKey
+pendingBuildingFetchKey = ""
+}catch(error){
+if(requestToken !== latestBuildingRequestToken) return
+pendingBuildingFetchKey = ""
+console.warn("Unable to load real buildings", error)
+}
+}
+
+function updateLocationVisuals(lat, lon){
+let locationKey = `${lat.toFixed(5)},${lon.toFixed(5)}`
+if(locationKey === lastVisualLocationKey) return
+lastVisualLocationKey = locationKey
+
+updateGroundMap(lat, lon)
+updateRealBuildings(lat, lon)
+backgroundMap.setView([lat, lon], 18, { animate: false })
+}
+
+function drawMapPlaceholder(lat, lon, statusText){
+mapContext.fillStyle = "#d8e4d0"
+mapContext.fillRect(0, 0, mapCanvas.width, mapCanvas.height)
+
+mapContext.strokeStyle = "rgba(60, 90, 60, 0.22)"
+mapContext.lineWidth = 2
+for(let i = 0; i <= 8; i++){
+let p = (mapCanvas.width / 8) * i
+mapContext.beginPath()
+mapContext.moveTo(p, 0)
+mapContext.lineTo(p, mapCanvas.height)
+mapContext.stroke()
+
+mapContext.beginPath()
+mapContext.moveTo(0, p)
+mapContext.lineTo(mapCanvas.width, p)
+mapContext.stroke()
+}
+
+mapContext.fillStyle = "#2f4f4f"
+mapContext.font = "bold 44px Arial"
+mapContext.textAlign = "center"
+mapContext.fillText("Map Ground", mapCanvas.width / 2, 84)
+
+mapContext.font = "28px Arial"
+mapContext.fillText(`Lat ${lat.toFixed(5)} | Lon ${lon.toFixed(5)}`, mapCanvas.width / 2, 132)
+
+if(statusText){
+mapContext.fillStyle = "#b04a2f"
+mapContext.fillText(statusText, mapCanvas.width / 2, mapCanvas.height - 48)
+}
+
+mapContext.strokeStyle = "#d62828"
+mapContext.lineWidth = 5
+mapContext.beginPath()
+mapContext.moveTo(mapCanvas.width / 2 - 18, mapCanvas.height / 2)
+mapContext.lineTo(mapCanvas.width / 2 + 18, mapCanvas.height / 2)
+mapContext.moveTo(mapCanvas.width / 2, mapCanvas.height / 2 - 18)
+mapContext.lineTo(mapCanvas.width / 2, mapCanvas.height / 2 + 18)
+mapContext.stroke()
+
+mapTexture.needsUpdate = true
+}
+
+function lonToTileX(lon, zoom){
+return ((lon + 180) / 360) * Math.pow(2, zoom)
+}
+
+function latToTileY(lat, zoom){
+let latRad = lat * Math.PI / 180
+return (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * Math.pow(2, zoom)
+}
+
+function loadImage(url){
+return new Promise((resolve, reject) => {
+let image = new Image()
+image.crossOrigin = "anonymous"
+image.onload = () => resolve(image)
+image.onerror = reject
+image.src = url
+})
+}
+
+async function updateGroundMap(lat, lon){
+let clampedLat = Math.max(-85, Math.min(85, lat))
+let zoom = 16
+let tileSize = 256
+let requestToken = ++latestMapRequestToken
+
+drawMapPlaceholder(clampedLat, lon, "Loading map tiles...")
+
+let xFloat = lonToTileX(lon, zoom)
+let yFloat = latToTileY(clampedLat, zoom)
+currentMapProjection.centerLat = clampedLat
+currentMapProjection.centerLon = lon
+currentMapProjection.centerTileX = xFloat
+currentMapProjection.centerTileY = yFloat
+currentMapProjection.worldSize = 600
+currentMapProjection.zoom = zoom
+let centerTileX = Math.floor(xFloat)
+let centerTileY = Math.floor(yFloat)
+let fracX = xFloat - centerTileX
+let fracY = yFloat - centerTileY
+let worldSize = Math.pow(2, zoom)
+
+let jobs = []
+for(let dy = -1; dy <= 1; dy++){
+for(let dx = -1; dx <= 1; dx++){
+let xTile = ((centerTileX + dx) % worldSize + worldSize) % worldSize
+let yTile = Math.max(0, Math.min(worldSize - 1, centerTileY + dy))
+let url = `https://tile.openstreetmap.org/${zoom}/${xTile}/${yTile}.png`
+jobs.push(loadImage(url).then(image => ({ image, dx, dy })))
+}
+}
+
+try{
+let tiles = await Promise.all(jobs)
+if(requestToken !== latestMapRequestToken) return
+
+let bufferCanvas = document.createElement("canvas")
+bufferCanvas.width = tileSize * 3
+bufferCanvas.height = tileSize * 3
+let bufferContext = bufferCanvas.getContext("2d")
+
+for(const tile of tiles){
+let drawX = (tile.dx + 1) * tileSize
+let drawY = (tile.dy + 1) * tileSize
+bufferContext.drawImage(tile.image, drawX, drawY, tileSize, tileSize)
+}
+
+mapContext.clearRect(0, 0, mapCanvas.width, mapCanvas.height)
+
+let sourceSize = tileSize * 2
+let sourceX = fracX * tileSize
+let sourceY = fracY * tileSize
+
+mapContext.drawImage(
+bufferCanvas,
+sourceX,
+sourceY,
+sourceSize,
+sourceSize,
+0,
+0,
+mapCanvas.width,
+mapCanvas.height
+)
+
+mapContext.strokeStyle = "rgba(255,255,255,0.9)"
+mapContext.lineWidth = 4
+mapContext.strokeRect(8, 8, mapCanvas.width - 16, mapCanvas.height - 16)
+
+mapContext.fillStyle = "rgba(20, 30, 45, 0.72)"
+mapContext.fillRect(18, 18, 350, 76)
+
+mapContext.fillStyle = "#ffffff"
+mapContext.font = "bold 28px Arial"
+mapContext.textAlign = "left"
+mapContext.fillText(`Lat ${clampedLat.toFixed(5)}`, 32, 52)
+mapContext.fillText(`Lon ${lon.toFixed(5)}`, 32, 88)
+
+mapContext.strokeStyle = "#d62828"
+mapContext.lineWidth = 5
+mapContext.beginPath()
+mapContext.moveTo(mapCanvas.width / 2 - 20, mapCanvas.height / 2)
+mapContext.lineTo(mapCanvas.width / 2 + 20, mapCanvas.height / 2)
+mapContext.moveTo(mapCanvas.width / 2, mapCanvas.height / 2 - 20)
+mapContext.lineTo(mapCanvas.width / 2, mapCanvas.height / 2 + 20)
+mapContext.stroke()
+
+mapTexture.needsUpdate = true
+}catch(error){
+if(requestToken !== latestMapRequestToken) return
+drawMapPlaceholder(clampedLat, lon, "Map tiles unavailable")
+}
+}
+
+
+// ---------- SOLAR POSITION ----------
+
+function solarPosition(date,lat,lon){
+let rad=Math.PI/180
+let start=new Date(date.getFullYear(),0,0)
+let diff=date-start
+let d=Math.floor(diff/86400000)
+
+let B=(360/365)*(d-81)
+let EoT= 9.87*Math.sin(2*B*rad) - 7.53*Math.cos(B*rad) - 1.5*Math.sin(B*rad)
+let delta= -23.45*Math.cos((360/365)*(d+10)*rad)
+
+let tz=Math.round(lon/15)
+let LSTM=15*tz
+let TC=4*(lon-LSTM)+EoT
+let LT=date.getHours()+date.getMinutes()/60
+let LST=LT+TC/60
+let HRA=15*(LST-12)
+
+let sin_alt= Math.sin(delta*rad)*Math.sin(lat*rad) + Math.cos(delta*rad)*Math.cos(lat*rad)*Math.cos(HRA*rad)
+let altitude=Math.asin(sin_alt)/rad
+
+let cos_az= (Math.sin(delta*rad)*Math.cos(lat*rad) - Math.cos(delta*rad)*Math.sin(lat*rad)*Math.cos(HRA*rad)) / Math.cos(altitude*rad)
+cos_az=Math.max(-1,Math.min(1,cos_az))
+
+let azimuth=Math.acos(cos_az)/rad
+if(HRA>0) azimuth=360-azimuth
+
+return{ d, B, EoT, delta, tz, LSTM, TC, LT, LST, HRA, altitude, azimuth }
+}
+
+
+// ---------- SUNRISE SUNSET (IMPROVED) ----------
+
+function sunTimes(date, lat, lon){
+let rad = Math.PI/180;
+let start = new Date(date.getFullYear(), 0, 0);
+let diff = date - start;
+let d = Math.floor(diff / 86400000);
+
+let B = (360/365)*(d-81);
+let EoT = 9.87*Math.sin(2*B*rad) - 7.53*Math.cos(B*rad) - 1.5*Math.sin(B*rad);
+let delta = -23.45*Math.cos((360/365)*(d+10)*rad);
+
+let tz = Math.round(lon/15);
+let LSTM = 15*tz;
+let TC = 4*(lon-LSTM) + EoT;
+
+let cos_HRA = -Math.tan(lat*rad) * Math.tan(delta*rad);
+if(cos_HRA > 1) return { sunrise: "-", sunset: "-" }; 
+if(cos_HRA < -1) return { sunrise: "24h Sun", sunset: "24h Sun" }; 
+
+let HRA_hours = (Math.acos(cos_HRA) / rad) / 15;
+let LT_sunrise = 12 - HRA_hours - (TC/60);
+let LT_sunset = 12 + HRA_hours - (TC/60);
+
+function formatTime(decimalHours) {
+    if (isNaN(decimalHours)) return "--:--";
+    let h = Math.floor(decimalHours);
+    let m = Math.round((decimalHours - h) * 60);
+    if (m === 60) { h += 1; m = 0; }
+    if (h < 0) h += 24;
+    if (h >= 24) h -= 24;
+    return h.toString().padStart(2, "0") + ":" + m.toString().padStart(2, "0");
+}
+
+return {
+    sunrise: formatTime(LT_sunrise),
+    sunset: formatTime(LT_sunset)
+};
+}
+
+
+// ---------- UPDATE SUN ----------
+
+function updateSunVector(){
+if(sunVector) scene.remove(sunVector)
+let points=[ new THREE.Vector3(0,0,0), sun.position ]
+let geometry=new THREE.BufferGeometry().setFromPoints(points)
+sunVector=new THREE.Line(
+geometry, new THREE.LineBasicMaterial({color:0x00aaff, opacity: 0.5, transparent: true})
+)
+scene.add(sunVector)
+}
+
+function drawSolarPath(){
+if(solarPathLine) scene.remove(solarPathLine)
+
+let lat=parseFloat(document.getElementById("latInput").value)
+let lon=parseFloat(document.getElementById("lonInput").value)
+let dateInput=document.getElementById("date").value
+let baseDate=new Date(dateInput)
+let points=[]
+
+for(let h=0;h<=24;h+=0.25){
+let d=new Date(baseDate)
+d.setHours(Math.floor(h))
+d.setMinutes((h%1)*60)
+let pos=solarPosition(d,lat,lon)
+
+if(pos.altitude>0){
+let alt=pos.altitude*Math.PI/180
+let az=pos.azimuth*Math.PI/180
+let r=solarRadius
+let x=r*Math.cos(alt)*Math.sin(az)
+let y=r*Math.sin(alt)
+let z=-r*Math.cos(alt)*Math.cos(az) 
+points.push(new THREE.Vector3(x,y,z))
+}
+}
+
+let geometry=new THREE.BufferGeometry().setFromPoints(points)
+solarPathLine=new THREE.Line(
+geometry, new THREE.LineBasicMaterial({color:0xff0000})
+)
+scene.add(solarPathLine)
+}
+
+function updateDynamicLighting(pos) {
+    if(pos.altitude > 10) { 
+        skyMat.color.setHex(0x87ceeb);
+        sunLight.intensity = 1.5;
+        ambientLight.intensity = 0.5;
+    } 
+    else if(pos.altitude > 0) { 
+        let transition = pos.altitude / 10; 
+        skyMat.color.lerpColors(new THREE.Color(0xff9966), new THREE.Color(0x87ceeb), transition);
+        sunLight.intensity = 1.5 * transition; 
+        ambientLight.intensity = 0.2 + (0.3 * transition);
+    } 
+    else { 
+        skyMat.color.setHex(0x0a1a2a);
+        sunLight.intensity = 0; 
+        ambientLight.intensity = 0.1; 
+    }
+}
+
+function updateSun(){
+let lat = parseFloat(document.getElementById("latInput").value)
+let lon = parseFloat(document.getElementById("lonInput").value)
+let dateInput=document.getElementById("date").value
+let minutes=parseInt(document.getElementById("timeSlider").value)
+
+let h=Math.floor(minutes/60)
+let m=minutes%60
+
+let date=new Date(dateInput)
+date.setHours(h)
+date.setMinutes(m)
+
+let pos=solarPosition(date,lat,lon)
+
+let alt=pos.altitude*Math.PI/180
+let az=pos.azimuth*Math.PI/180
+let r=solarRadius
+
+let x=r*Math.cos(alt)*Math.sin(az)
+let y=r*Math.sin(alt)
+let z=-r*Math.cos(alt)*Math.cos(az) 
+
+sun.position.set(x,y,z)
+sunLight.position.copy(sun.position)
+
+updateDynamicLighting(pos);
+updateSunVector()
+
+let timeText = h.toString().padStart(2,"0")+":"+m.toString().padStart(2,"0")
+let st = sunTimes(date, lat, lon)
+
+document.getElementById("info").innerHTML = `
+<b>Local Time (LT):</b> ${timeText}<br>
+<b>Altitude:</b> ${pos.altitude.toFixed(2)}°<br>
+<b>Azimuth:</b> ${pos.azimuth.toFixed(2)}°<br>
+<b>Sunrise:</b> ${st.sunrise}<br>
+<b>Sunset:</b> ${st.sunset}<br>
+<hr style="border:0; border-top:1px solid #445566; margin: 8px 0;">
+<b>Parameters:</b><br>
+<span style="color:#a8c0d8;">
+<b>Day of Year (d):</b> ${pos.d}<br>
+<b>Time Zone Est. (tz):</b> ${pos.tz}<br>
+<b>LSTM:</b> ${pos.LSTM.toFixed(2)}°<br>
+<b>Eq. of Time (EoT):</b> ${pos.EoT.toFixed(2)} min<br>
+<b>Time Corr (TC):</b> ${pos.TC.toFixed(2)} min<br>
+<b>Local Solar Time (LST):</b> ${pos.LST.toFixed(2)} h<br>
+<b>Declination (δ):</b> ${pos.delta.toFixed(2)}°<br>
+<b>Hour Angle (HRA):</b> ${pos.HRA.toFixed(2)}°
+</span>
+`
+drawSolarPath()
+}
+
+
+// ---------- PLAY SUN ----------
+
+let playing=false
+let interval
+
+function playSun(){
+playing=!playing
+if(playing){
+
+videoBoard.visible = showDecor
+if(showDecor) video.play().catch(()=>{})
+
+}else{
+
+video.pause()
+videoBoard.visible = false
+
+}
+
+imgShake.visible = showDecor && playing
+imgRotate.visible = showDecor && playing
+imgLook.visible = showDecor && playing
+imgFloat.visible = showDecor && playing
+videoBoard.visible = showDecor && playing
+let slider=document.getElementById("timeSlider")
+let tInput=document.getElementById("timeInput")
+
+if(playing){
+interval=setInterval(()=>{
+let val = parseInt(slider.value)+1
+if(val>1440) val=0
+slider.value = val
+
+let h = Math.floor(val/60).toString().padStart(2,"0")
+let m = (val%60).toString().padStart(2,"0")
+tInput.value = `${h}:${m}`
+updateSun()
+},40)
+}else{
+clearInterval(interval)
+}
+}
+
+
+// ---------- UI ----------
+
+let timeSlider=document.getElementById("timeSlider")
+let timeInput=document.getElementById("timeInput")
+
+timeSlider.oninput=()=>{
+let h = Math.floor(timeSlider.value/60).toString().padStart(2,"0")
+let m = (timeSlider.value%60).toString().padStart(2,"0")
+timeInput.value = `${h}:${m}`
+updateSun()
+}
+
+timeInput.oninput=()=>{
+let parts = timeInput.value.split(":")
+if(parts.length === 2){
+let mins = parseInt(parts[0])*60 + parseInt(parts[1])
+timeSlider.value = mins
+updateSun()
+}
+}
+
+let latInput=document.getElementById("latInput")
+let latSlider=document.getElementById("latSlider")
+
+let lonInput=document.getElementById("lonInput")
+let lonSlider=document.getElementById("lonSlider")
+
+latSlider.oninput=()=>{
+latInput.value=latSlider.value
+updateLocationVisuals(parseFloat(latSlider.value), parseFloat(lonInput.value))
+updateSun()
+}
+latInput.oninput=()=>{
+latSlider.value=latInput.value
+updateLocationVisuals(parseFloat(latInput.value), parseFloat(lonInput.value))
+updateSun()
+}
+lonSlider.oninput=()=>{
+lonInput.value=lonSlider.value
+updateLocationVisuals(parseFloat(latInput.value), parseFloat(lonSlider.value))
+updateSun()
+}
+lonInput.oninput=()=>{
+lonSlider.value=lonInput.value
+updateLocationVisuals(parseFloat(latInput.value), parseFloat(lonInput.value))
+updateSun()
+}
+
+document.getElementById("date").oninput=updateSun
+
+document.getElementById("locationSelect").onchange=function(){
+let loc=this.value
+if(loc && locations[loc]){
+let lat=locations[loc].lat
+let lon=locations[loc].lon
+latInput.value=lat
+latSlider.value=lat
+lonInput.value=lon
+lonSlider.value=lon
+updateLocationVisuals(lat, lon)
+updateSun()
+}
+}
+
+function setCoordinates(lat, lon){
+latInput.value = lat
+latSlider.value = lat
+lonInput.value = lon
+lonSlider.value = lon
+document.getElementById("locationSelect").value = ""
+updateLocationVisuals(lat, lon)
+updateSun()
+}
+
+function useCurrentLocation(){
+if(!navigator.geolocation){
+document.getElementById("info").innerHTML = "<b>GPS:</b> Browser does not support geolocation.<br><br>" + document.getElementById("info").innerHTML
+return
+}
+
+navigator.geolocation.getCurrentPosition(
+position => {
+setCoordinates(position.coords.latitude, position.coords.longitude)
+},
+error => {
+const messages = {
+1: "Location permission denied",
+2: "Location unavailable",
+3: "Location request timed out"
+}
+const label = messages[error.code] || "Unable to read GPS location"
+document.getElementById("info").innerHTML = `<b>GPS:</b> ${label}<br><br>` + document.getElementById("info").innerHTML
+},
+{
+enableHighAccuracy: true,
+timeout: 10000,
+maximumAge: 0
+}
+)
+}
+
+document.getElementById("date").valueAsDate=new Date()
+drawMapPlaceholder(14.88, 102.01, "Initializing map...")
+updateLocationVisuals(parseFloat(latInput.value), parseFloat(lonInput.value))
+updateSun()
+
+
+// ---------- LOOP ----------
+let t = 0
+
+function animate(){
+
+requestAnimationFrame(animate)
+
+t += 0.05
+
+if(playing && showDecor){
+
+imgShake.position.x = 90 + Math.sin(t*20)*0.5
+
+imgRotate.rotation.y += 0.05
+
+imgLook.rotation.y = Math.sin(t)*0.8
+
+let r = 95
+
+imgFloat.position.x = Math.cos(t)*r
+imgFloat.position.z = Math.sin(t)*r
+imgFloat.position.y = 20 + Math.sin(t*2)*3
+imgFloat.lookAt(0,20,0)
+board.position.y = 60 + Math.sin(t)*1
+
+}
+
+renderer.render(scene,camera)
+
+}
+animate()
+
+window.addEventListener("resize",()=>{
+camera.aspect=window.innerWidth/window.innerHeight
+camera.updateProjectionMatrix()
+renderer.setSize(window.innerWidth,window.innerHeight)
+backgroundMap.invalidateSize()
+})
+
+</script>
+</body>
+</html>
